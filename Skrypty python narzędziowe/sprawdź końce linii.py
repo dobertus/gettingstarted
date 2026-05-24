@@ -77,11 +77,14 @@ def main():
     for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=True):
         for name in filenames:
             filepath = os.path.join(dirpath, name)
+            # pomiń pliki kopii zapasowych .bak
+            if name.lower().endswith(".bak"):
+                continue
             try:
                 eol = detect_eol(filepath)
             except Exception as exc:
                 eol = f"error:{type(exc).__name__}"
-            if eol == 'CRLF':
+            if eol == 'mixed':
                 crlf_files.append(filepath)
                 print(f"{filepath} -> {eol}")
                 try:
