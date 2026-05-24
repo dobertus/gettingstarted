@@ -1,4 +1,5 @@
 import os
+import tempfile
 from tkinter import Tk, filedialog
 
 
@@ -33,6 +34,39 @@ def pick_root():
     return path
 
 
+def convert_to_lf(path, backup=True):
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except (OSError, PermissionError):
+        return False
+    # pomijamy pliki binarne
+    if b"\x00" in data:
+        return False
+    new = data.replace(b"\r\n", b"\n")
+    if new == data:
+        return False
+    if backup:
+        try:
+            with open(path + ".bak", "wb") as b:
+                b.write(data)
+        except Exception:
+            pass
+    dirpath = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=dirpath)
+    try:
+        with os.fdopen(fd, "wb") as tf:
+            tf.write(new)
+        os.replace(tmp, path)
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+    return True
+
+
 def main():
     root = pick_root()
     if not root:
@@ -50,6 +84,15 @@ def main():
             if eol == 'CRLF':
                 crlf_files.append(filepath)
                 print(f"{filepath} -> {eol}")
+                try:
+                    converted = convert_to_lf(filepath, backup=True)
+                except Exception as exc:
+                    converted = False
+                    print(f"  conversion error: {exc}")
+                if converted:
+                    print(f"  converted to LF (backup: {filepath}.bak)")
+                else:
+                    print(f"  conversion skipped/failed")
 
     crlf_files.sort()
     out_path = os.path.join(root, "crlf_files.csv")
