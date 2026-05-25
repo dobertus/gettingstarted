@@ -1,6 +1,20 @@
 import os
+import sys
+import argparse
 import tempfile
 from tkinter import Tk, filedialog
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Wyszukaj pliki wg typu EOL i opcjonalnie konwertuj do LF")
+    parser.add_argument("-t", "--types", default="CRLF",
+                        help=("Comma-separated EOL types to target. Allowed: binary,mixed,LF,CR,unknown,CRLF "
+                              "(default: CRLF)"))
+    parser.add_argument("--force-binary", action="store_true",
+                        help="Allow converting files detected as binary (contains NUL) — risky")
+    parser.add_argument("-o", "--output", default=None,
+                        help="Output CSV filename relative to selected root (default auto-generated)")
+    return parser.parse_args()
 
 
 def detect_eol(path, read_bytes=65536):
@@ -34,16 +48,17 @@ def pick_root():
     return path
 
 
-def convert_to_lf(path, backup=True):
+def convert_to_lf(path, backup=True, allow_binary=False):
     try:
         with open(path, "rb") as f:
             data = f.read()
     except (OSError, PermissionError):
         return False
-    # pomijamy pliki binarne
-    if b"\x00" in data:
+    # opcjonalne pomijanie plików binarnych
+    if b"\x00" in data and not allow_binary:
         return False
-    new = data.replace(b"\r\n", b"\n")
+    # zamień CRLF i samodzielne CR na LF
+    new = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
     if new == data:
         return False
     if backup:
@@ -68,11 +83,28 @@ def convert_to_lf(path, backup=True):
 
 
 def main():
+    args = parse_args()
+
+    # parse and validate requested EOL types
+    allowed = {"binary", "mixed", "lf", "cr", "unknown", "crlf"}
+    requested = [s.strip() for s in args.types.split(",") if s.strip()]
+    if not requested:
+        print("Brak typów EOL do przetworzenia. Kończę.")
+        return
+    for s in requested:
+        if s.lower() not in allowed:
+            print(f"Nieprawidłowy typ '{s}'. Dozwolone: {', '.join(sorted(allowed))}")
+            return
+
+    norm_map = {"binary": "binary", "mixed": "mixed", "lf": "LF", "cr": "CR", "unknown": "unknown", "crlf": "CRLF"}
+    requested_set = set(norm_map[s.lower()] for s in requested)
+
     root = pick_root()
     if not root:
         print("Nie wybrano katalogu. Kończę.")
         return
-    crlf_files = []
+
+    matched_files = []
 
     for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=True):
         for name in filenames:
@@ -84,11 +116,15 @@ def main():
                 eol = detect_eol(filepath)
             except Exception as exc:
                 eol = f"error:{type(exc).__name__}"
-            if eol == 'mixed':
-                crlf_files.append(filepath)
+            if eol in requested_set:
+                matched_files.append(filepath)
                 print(f"{filepath} -> {eol}")
+                # handle binary specially unless forced
+                if eol == "binary" and not args.force_binary:
+                    print("  binary file detected; conversion skipped (use --force-binary to allow)")
+                    continue
                 try:
-                    converted = convert_to_lf(filepath, backup=True)
+                    converted = convert_to_lf(filepath, backup=True, allow_binary=args.force_binary)
                 except Exception as exc:
                     converted = False
                     print(f"  conversion error: {exc}")
@@ -97,13 +133,18 @@ def main():
                 else:
                     print(f"  conversion skipped/failed")
 
-    crlf_files.sort()
-    out_path = os.path.join(root, "crlf_files.csv")
+    matched_files.sort()
+    # determine output filename
+    if args.output:
+        out_name = args.output
+    else:
+        out_name = "_".join(sorted(s.lower() for s in requested_set)) + "_files.csv"
+    out_path = os.path.join(root, out_name)
     try:
         with open(out_path, "w", encoding="utf-8", newline="") as f:
-            for p in crlf_files:
+            for p in matched_files:
                 f.write(p + "\n")
-        print(f"Zapisano {len(crlf_files)} wpisów do {out_path}")
+        print(f"Zapisano {len(matched_files)} wpisów do {out_path}")
     except OSError as e:
         print(f"Nie można zapisać pliku {out_path}: {e}")
 
